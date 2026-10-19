@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Storage Monitor</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #667085; --border: #e4e7ec;
+    --accent: #2f6fde; --ok: #1f9d55; --warn: #d98a00; --crit: #d64545; --track: #eef0f3;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0f1218; --panel: #171b23; --text: #e6e9ef; --muted: #98a2b3; --border: #262c38;
+      --accent: #5b8ff0; --ok: #3cc47c; --warn: #f0a92e; --crit: #f06464; --track: #222833;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0f1218; --panel: #171b23; --text: #e6e9ef; --muted: #98a2b3; --border: #262c38;
+    --accent: #5b8ff0; --ok: #3cc47c; --warn: #f0a92e; --crit: #f06464; --track: #222833;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 24px 16px 48px; }
+  header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+  h1 { font-size: 20px; margin: 0; }
+  .sub { color: var(--muted); font-size: 13px; }
+  .controls { display: flex; gap: 8px; align-items: center; }
+  button {
+    background: var(--panel); color: var(--text); border: 1px solid var(--border);
+    border-radius: 8px; padding: 7px 12px; font: inherit; cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); margin-right: 6px; }
+  .paused .dot { background: var(--muted); }
+
+  .grid { display: grid; gap: 16px; }
+  .kpis { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); margin-bottom: 16px; }
+  .main { grid-template-columns: 2fr 1fr; }
+  @media (max-width: 860px) { .main { grid-template-columns: 1fr; } }
+
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; min-width: 0; }
+  .card h2 { font-size: 14px; margin: 0 0 12px; font-weight: 600; }
+  .kpi .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  .kpi .value { font-size: 26px; font-weight: 650; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .kpi .hint { color: var(--muted); font-size: 12px; margin-top: 2px; }
+
+  .bar { height: 8px; background: var(--track); border-radius: 99px; overflow: hidden; }
+  .bar > span { display: block; height: 100%; border-radius: 99px; transition: width .6s ease; }
+
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  tr:last-child td { border-bottom: 0; }
+  .table-scroll { overflow-x: auto; }
+  .usage-cell { min-width: 140px; }
+  .usage-cell .pct { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .pill { font-size: 11px; padding: 2px 8px; border-radius: 99px; font-weight: 600; white-space: nowrap; }
+  .pill.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 14%, transparent); }
+  .pill.warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); }
+  .pill.crit { color: var(--crit); background: color-mix(in srgb, var(--crit) 14%, transparent); }
+
+  #chart { width: 100%; height: 220px; display: block; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin-top: 8px; }
+  .legend i { display: inline-block; width: 10px; height: 3px; border-radius: 2px; margin-right: 5px; vertical-align: middle; }
+
+  .alerts { list-style: none; margin: 0; padding: 0; max-height: 420px; overflow-y: auto; }
+  .alerts li { padding: 10px 0; border-bottom: 1px solid var(--border); display: flex; gap: 10px; }
+  .alerts li:last-child { border-bottom: 0; }
+  .alerts .time { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .empty { color: var(--muted); font-size: 13px; }
+  footer { color: var(--muted); font-size: 12px; margin-top: 24px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Storage Monitoring Dashboard</h1>
+      <div class="sub">Demo data · updates every 3 seconds · last update <span id="updated">–</span></div>
+    </div>
+    <div class="controls">
+      <button id="toggle"><span class="dot"></span><span id="toggleLabel">Live</span></button>
+      <button id="theme" title="Toggle theme">◐ Theme</button>
+    </div>
+  </header>
+
+  <section class="grid kpis">
+    <div class="card kpi"><div class="label">Total capacity</div><div class="value" id="kTotal">–</div><div class="hint" id="kVolumes">–</div></div>
+    <div class="card kpi"><div class="label">Used</div><div class="value" id="kUsed">–</div><div class="bar" style="margin-top:8px"><span id="kUsedBar"></span></div></div>
+    <div class="card kpi"><div class="label">Free</div><div class="value" id="kFree">–</div><div class="hint" id="kFreePct">–</div></div>
+    <div class="card kpi"><div class="label">Throughput</div><div class="value" id="kIops">–</div><div class="hint">read + write IOPS</div></div>
+  </section>
+
+  <section class="grid main">
+    <div class="grid" style="gap:16px">
+      <div class="card">
+        <h2>Usage trend (last 30 samples)</h2>
+        <svg id="chart" viewBox="0 0 600 220" preserveAspectRatio="none" role="img" aria-label="Usage trend per volume"></svg>
+        <div class="legend" id="legend"></div>
+      </div>
+      <div class="card">
+        <h2>Volumes</h2>
+        <div class="table-scroll">
+          <table>
+            <thead><tr><th>Volume</th><th>Type</th><th class="usage-cell">Usage</th><th>Used / Size</th><th>IOPS</th><th>Status</th></tr></thead>
+            <tbody id="rows"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Alerts</h2>
+      <ul class="alerts" id="alerts"><li class="empty">No alerts yet.</li></ul>
+    </div>
+  </section>
+
+  <footer>Static demo — replace <code>tick()</code> with a fetch to your metrics API to use real data.</footer>
+</div>
+
+<script>
+  const WARN = 75, CRIT = 90, HISTORY = 30;
+  const COLORS = ["#2f6fde", "#1f9d55", "#d98a00", "#8b5cf6", "#d64545", "#0ea5a4"];
+
+  // Mock volumes; sizes in GB
+  const volumes = [
+    { name: "prod-db-01",    type: "SSD",  size: 2048,  used: 1320 },
+    { name: "prod-logs",     type: "HDD",  size: 8192,  used: 6050 },
+    { name: "backup-vault",  type: "HDD",  size: 16384, used: 9800 },
+    { name: "web-assets",    type: "SSD",  size: 1024,  used: 410  },
+    { name: "analytics-lake",type: "Object",size: 32768,used: 27400 },
+    { name: "dev-scratch",   type: "SSD",  size: 512,   used: 300  },
+  ].map((v, i) => ({ ...v, color: COLORS[i], iops: 0, history: [], status: "ok" }));
+
+  const alerts = [];
+  let timer = null;
+
+  const fmt = gb => gb >= 1024 ? (gb / 1024).toFixed(1) + " TB" : Math.round(gb) + " GB";
+  const pct = v => (v.used / v.size) * 100;
+  const statusOf = p => p >= CRIT ? "crit" : p >= WARN ? "warn" : "ok";
+  const levelColor = s => getComputedStyle(document.documentElement).getPropertyValue("--" + s);
+
+  function tick() {
+    for (const v of volumes) {
+      // Random walk with a slight upward drift; occasional cleanup
+      let delta = (Math.random() - 0.4) * v.size * 0.01;
+      if (Math.random() < 0.03) delta = -v.size * 0.08;
+      v.used = Math.min(v.size * 0.99, Math.max(v.size * 0.05, v.used + delta));
+      v.iops = Math.round((v.type === "SSD" ? 4000 : 800) * (0.5 + Math.random()));
+      v.history.push(pct(v));
+      if (v.history.length > HISTORY) v.history.shift();
+
+      const next = statusOf(pct(v));
+      if (next !== v.status) {
+        const msg = next === "ok"
+          ? `${v.name} back to normal (${pct(v).toFixed(1)}%)`
+          : `${v.name} ${next === "crit" ? "critical" : "warning"}: ${pct(v).toFixed(1)}% used`;
+        alerts.unshift({ level: next, msg, time: new Date() });
+        if (alerts.length > 50) alerts.pop();
+        v.status = next;
+      }
+    }
+    render();
+  }
+
+  function render() {
+    const total = volumes.reduce((s, v) => s + v.size, 0);
+    const used = volumes.reduce((s, v) => s + v.used, 0);
+    const iops = volumes.reduce((s, v) => s + v.iops, 0);
+    const usedPct = used / total * 100;
+
+    kTotal.textContent = fmt(total);
+    kVolumes.textContent = `${volumes.length} volumes`;
+    kUsed.textContent = fmt(used);
+    kUsedBar.style.width = usedPct + "%";
+    kUsedBar.style.background = levelColor(statusOf(usedPct));
+    kFree.textContent = fmt(total - used);
+    kFreePct.textContent = `${(100 - usedPct).toFixed(1)}% available`;
+    kIops.textContent = iops.toLocaleString();
+    updated.textContent = new Date().toLocaleTimeString();
+
+    rows.innerHTML = volumes.map(v => {
+      const p = pct(v), s = statusOf(p);
+      return `<tr>
+        <td><strong>${v.name}</strong></td>
+        <td>${v.type}</td>
+        <td class="usage-cell"><div class="bar"><span style="width:${p}%;background:var(--${s})"></span></div><div class="pct">${p.toFixed(1)}%</div></td>
+        <td class="num">${fmt(v.used)} / ${fmt(v.size)}</td>
+        <td class="num">${v.iops.toLocaleString()}</td>
+        <td><span class="pill ${s}">${s === "ok" ? "Healthy" : s === "warn" ? "Warning" : "Critical"}</span></td>
+      </tr>`;
+    }).join("");
+
+    renderChart();
+
+    document.getElementById("alerts").innerHTML = alerts.length
+      ? alerts.map(a => `<li><span class="pill ${a.level}">${a.level.toUpperCase()}</span><div><div>${a.msg}</div><div class="time">${a.time.toLocaleTimeString()}</div></div></li>`).join("")
+      : `<li class="empty">No alerts yet.</li>`;
+  }
+
+  function renderChart() {
+    const W = 600, H = 220, pad = { l: 34, r: 8, t: 8, b: 18 };
+    const x = i => pad.l + (i / (HISTORY - 1)) * (W - pad.l - pad.r);
+    const y = p => pad.t + (1 - p / 100) * (H - pad.t - pad.b);
+    const muted = levelColor("muted"), border = levelColor("border");
+
+    let svg = "";
+    for (const g of [0, 25, 50, 75, 100]) {
+      svg += `<line x1="${pad.l}" x2="${W - pad.r}" y1="${y(g)}" y2="${y(g)}" stroke="${border}" stroke-width="1"/>`;
+      svg += `<text x="${pad.l - 6}" y="${y(g) + 4}" font-size="10" fill="${muted}" text-anchor="end">${g}%</text>`;
+    }
+    svg += `<line x1="${pad.l}" x2="${W - pad.r}" y1="${y(CRIT)}" y2="${y(CRIT)}" stroke="${levelColor("crit")}" stroke-dasharray="4 4" stroke-width="1"/>`;
+    for (const v of volumes) {
+      const offset = HISTORY - v.history.length;
+      const pts = v.history.map((p, i) => `${x(i + offset).toFixed(1)},${y(p).toFixed(1)}`).join(" ");
+      svg += `<polyline points="${pts}" fill="none" stroke="${v.color}" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>`;
+    }
+    chart.innerHTML = svg;
+  }
+
+  legend.innerHTML = volumes.map(v => `<span><i style="background:${v.color}"></i>${v.name}</span>`).join("")
+    + `<span><i style="background:var(--crit)"></i>critical threshold (${CRIT}%)</span>`;
+
+  function start() { timer = setInterval(tick, 3000); toggle.classList.remove("paused"); toggleLabel.textContent = "Live"; }
+  function stop() { clearInterval(timer); timer = null; toggle.classList.add("paused"); toggleLabel.textContent = "Paused"; }
+  toggle.onclick = () => timer ? stop() : start();
+
+  theme.onclick = () => {
+    const root = document.documentElement;
+    const dark = root.dataset.theme ? root.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+    root.dataset.theme = dark ? "light" : "dark";
+    render();
+  };
+
+  // Seed some history so the chart isn't empty on load
+  for (let i = 0; i < HISTORY; i++) tick();
+  start();
+</script>
+</body>
+</html>
